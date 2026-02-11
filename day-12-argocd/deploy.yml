@@ -17,7 +17,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
       - name: swiggy-app
-        #image: veeranarni/hotstar:latest
-        image: sevenajay/hotstar:latest
+        image: veeranarni/hotstar:latest
+        #image: sevenajay/hotstar:latest
         imagePullPolicy: "Always"
         
