@@ -18,6 +18,6 @@ spec:
       containers:
       - name: swiggy-app
         #image: veeranarni/hotstar:latest
-        image: sevenajay/hotstar
+        image: sevenajay/hotstar:latest
         imagePullPolicy: "Always"
         
