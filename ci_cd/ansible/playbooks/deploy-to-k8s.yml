@@ -1,0 +1,167 @@
+---
+# Ansible Playbook: Deploy Application to Kubernetes
+# This playbook deploys the application to Kubernetes cluster
+
+- name: Deploy Application to Kubernetes
+  hosts: localhost
+  gather_facts: no
+  vars:
+    app_name: cicd-demo
+    namespace: "{{ environment }}"
+    image_tag: "{{ image_tag | default('latest') }}"
+    docker_registry: "docker.io/yourorg"
+    replicas: "{{ replicas | default(1) }}"
+
+  tasks:
+    - name: Print deployment information
+      debug:
+        msg: "Deploying {{ app_name }}:{{ image_tag }} to {{ environment }} environment"
+
+    - name: Create namespace if not exists
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+            labels:
+              environment: "{{ environment }}"
+              managed-by: ansible
+
+    - name: Deploy ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ app_name }}-config"
+            labels:
+              app: "{{ app_name }}"
+          data:
+            APP_ENV: "{{ environment }}"
+            LOG_LEVEL: "{{ log_level | default('info') }}"
+
+    - name: Deploy Secret
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ app_name }}-secret"
+            labels:
+              app: "{{ app_name }}"
+          type: Opaque
+          data:
+            DATABASE_PASSWORD: "{{ database_password | b64encode }}"
+            API_KEY: "{{ api_key | b64encode }}"
+
+    - name: Deploy Application
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ app_name }}"
+            labels:
+              app: "{{ app_name }}"
+              version: "{{ image_tag }}"
+          spec:
+            replicas: "{{ replicas }}"
+            selector:
+              matchLabels:
+                app: "{{ app_name }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ app_name }}"
+                  version: "{{ image_tag }}"
+              spec:
+                containers:
+                  - name: "{{ app_name }}"
+                    image: "{{ docker_registry }}/{{ app_name }}:{{ image_tag }}"
+                    imagePullPolicy: Always
+                    ports:
+                      - containerPort: 8000
+                    envFrom:
+                      - configMapRef:
+                          name: "{{ app_name }}-config"
+                      - secretRef:
+                          name: "{{ app_name }}-secret"
+                    resources:
+                      requests:
+                        memory: "{{ memory_request | default('256Mi') }}"
+                        cpu: "{{ cpu_request | default('250m') }}"
+                      limits:
+                        memory: "{{ memory_limit | default('512Mi') }}"
+                        cpu: "{{ cpu_limit | default('500m') }}"
+                    livenessProbe:
+                      httpGet:
+                        path: /health
+                        port: 8000
+                      initialDelaySeconds: 30
+                      periodSeconds: 10
+                    readinessProbe:
+                      httpGet:
+                        path: /ready
+                        port: 8000
+                      initialDelaySeconds: 10
+                      periodSeconds: 5
+
+    - name: Deploy Service
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ app_name }}"
+            labels:
+              app: "{{ app_name }}"
+          spec:
+            type: LoadBalancer
+            selector:
+              app: "{{ app_name }}"
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 8000
+
+    - name: Wait for deployment to be ready
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ namespace }}"
+        name: "{{ app_name }}"
+      register: deployment_status
+      until: deployment_status.resources[0].status.availableReplicas == replicas | int
+      retries: 30
+      delay: 10
+
+    - name: Get deployment status
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ namespace }}"
+        name: "{{ app_name }}"
+      register: deployment_info
+
+    - name: Display deployment status
+      debug:
+        msg: "Deployment successful! Available replicas: {{ deployment_info.resources[0].status.availableReplicas }}"
+
+    - name: Get service endpoint
+      kubernetes.core.k8s_info:
+        kind: Service
+        namespace: "{{ namespace }}"
+        name: "{{ app_name }}"
+      register: service_info
+
+    - name: Display service endpoint
+      debug:
+        msg: "Service endpoint: {{ service_info.resources[0].status.loadBalancer.ingress[0].ip | default('pending') }}"

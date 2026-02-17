@@ -1,0 +1,158 @@
+groups:
+  - name: application_alerts
+    interval: 30s
+    rules:
+      # High error rate alert
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_request_errors_total[5m])) by (namespace, pod)
+            /
+            sum(rate(http_requests_total[5m])) by (namespace, pod)
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: application
+        annotations:
+          summary: "High error rate detected (instance {{ $labels.instance }})"
+          description: "Error rate is {{ $value }}% for the last 5 minutes in {{ $labels.namespace }}/{{ $labels.pod }}"
+
+      # Critical error rate alert
+      - alert: CriticalErrorRate
+        expr: |
+          (
+            sum(rate(http_request_errors_total[5m])) by (namespace, pod)
+            /
+            sum(rate(http_requests_total[5m])) by (namespace, pod)
+          ) * 100 > 10
+        for: 2m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "Critical error rate detected (instance {{ $labels.instance }})"
+          description: "Error rate is {{ $value }}% for the last 5 minutes in {{ $labels.namespace }}/{{ $labels.pod }}"
+
+      # Pod down alert
+      - alert: PodDown
+        expr: up{job=~"cicd-demo-.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: application
+        annotations:
+          summary: "Pod is down (instance {{ $labels.instance }})"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been down for more than 2 minutes"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            container_memory_usage_bytes{pod=~"cicd-demo-.*"}
+            /
+            container_spec_memory_limit_bytes{pod=~"cicd-demo-.*"}
+          ) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: application
+        annotations:
+          summary: "High memory usage (instance {{ $labels.instance }})"
+          description: "Memory usage is {{ $value }}% in {{ $labels.namespace }}/{{ $labels.pod }}"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          (
+            rate(container_cpu_usage_seconds_total{pod=~"cicd-demo-.*"}[5m])
+            /
+            container_spec_cpu_quota{pod=~"cicd-demo-.*"}
+            * container_spec_cpu_period{pod=~"cicd-demo-.*"}
+          ) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          component: application
+        annotations:
+          summary: "High CPU usage (instance {{ $labels.instance }})"
+          description: "CPU usage is {{ $value }}% in {{ $labels.namespace }}/{{ $labels.pod }}"
+
+      # Slow response time
+      - alert: SlowResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{job=~"cicd-demo-.*"}[5m])
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: application
+        annotations:
+          summary: "Slow response time (instance {{ $labels.instance }})"
+          description: "95th percentile response time is {{ $value }}s in {{ $labels.namespace }}/{{ $labels.pod }}"
+
+  - name: kubernetes_alerts
+    interval: 30s
+    rules:
+      # Deployment replicas mismatch
+      - alert: DeploymentReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas{deployment="cicd-demo"}
+          !=
+          kube_deployment_status_replicas_available{deployment="cicd-demo"}
+        for: 10m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "Deployment replicas mismatch (namespace {{ $labels.namespace }})"
+          description: "Deployment {{ $labels.deployment }} has not matched the expected number of replicas for 10 minutes"
+
+      # Pod crash looping
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total{pod=~"cicd-demo-.*"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: kubernetes
+        annotations:
+          summary: "Pod is crash looping (pod {{ $labels.pod }})"
+          description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is crash looping"
+
+      # Container waiting
+      - alert: ContainerWaiting
+        expr: |
+          sum by (namespace, pod, container) (kube_pod_container_status_waiting_reason{pod=~"cicd-demo-.*"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: kubernetes
+        annotations:
+          summary: "Container waiting (pod {{ $labels.pod }})"
+          description: "Container {{ $labels.container }} in pod {{ $labels.pod }} has been waiting for 10 minutes"
+
+  - name: infrastructure_alerts
+    interval: 30s
+    rules:
+      # Node disk pressure
+      - alert: NodeDiskPressure
+        expr: kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          component: infrastructure
+        annotations:
+          summary: "Node under disk pressure (node {{ $labels.node }})"
+          description: "Node {{ $labels.node }} is under disk pressure"
+
+      # Node memory pressure
+      - alert: NodeMemoryPressure
+        expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          component: infrastructure
+        annotations:
+          summary: "Node under memory pressure (node {{ $labels.node }})"
+          description: "Node {{ $labels.node }} is under memory pressure"

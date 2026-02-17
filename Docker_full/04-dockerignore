@@ -1,0 +1,209 @@
+# .dockerignore - Exclude files from Docker build context
+
+# Git files
+.git
+.gitignore
+.gitattributes
+.github
+
+# CI/CD
+.gitlab-ci.yml
+.travis.yml
+.circleci
+azure-pipelines.yml
+Jenkinsfile
+
+# Documentation
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE
+*.md
+docs/
+documentation/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.bak
+*.tmp
+*~
+.DS_Store
+Thumbs.db
+
+# Dependencies (install in Dockerfile)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Java/Maven/Gradle
+target/
+*.class
+*.jar
+*.war
+*.ear
+.gradle/
+build/
+.mvn/
+mvnw
+mvnw.cmd
+
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dll
+*.exe
+*.pdb
+*.nupkg
+
+# Go
+*.exe
+*.test
+*.prof
+vendor/
+
+# Ruby
+*.gem
+*.rbc
+.bundle/
+vendor/bundle/
+
+# Logs
+logs/
+*.log
+log/
+npm-debug.log*
+
+# Testing
+test/
+tests/
+spec/
+coverage/
+.nyc_output/
+*.test
+*.spec.ts
+*.spec.js
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.development
+.env.test
+.env.production
+*.env
+secrets/
+credentials/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data/
+dump/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.cache/
+.temp/
+
+# Build artifacts
+dist/
+out/
+public/
+.next/
+.nuxt/
+.output/
+
+# Docker files (don't copy these into container)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Cloud provider files
+.aws/
+.azure/
+.gcloud/
+
+# Kubernetes files
+*.yaml
+*.yml
+k8s/
+kubernetes/
+helm/
+
+# Backup files
+*.backup
+*.bak
+*.old
+*.orig
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Large media files (if applicable)
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.mp3
+*.wav
+*.psd
+*.ai
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Miscellaneous
+.history/
+.husky/
+.eslintcache
+.stylelintcache

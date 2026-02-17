@@ -1,0 +1,481 @@
+# Comprehensive Dockerfile with ALL Instructions
+# This file demonstrates every Docker instruction with examples
+
+# ==============================================================================
+# 1. FROM - Base Image (REQUIRED - must be first instruction)
+# ==============================================================================
+FROM ubuntu:22.04 AS base
+# FROM specifies the base image to build upon
+# AS base - names this build stage for multi-stage builds
+# Always use specific versions (not 'latest') for reproducibility
+
+
+# ==============================================================================
+# 2. LABEL - Metadata (optional but recommended)
+# ==============================================================================
+LABEL maintainer="devops@example.com"
+LABEL version="1.0"
+LABEL description="Comprehensive Dockerfile demonstrating all instructions"
+LABEL org.opencontainers.image.authors="DevOps Team"
+LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.created="2026-02-16"
+LABEL org.opencontainers.image.source="https://github.com/example/repo"
+# LABEL adds metadata to the image (key-value pairs)
+# Use to document your image
+
+
+# ==============================================================================
+# 3. ARG - Build-time Variables
+# ==============================================================================
+ARG DEBIAN_FRONTEND=noninteractive
+ARG APP_VERSION=1.0.0
+ARG BUILD_DATE
+ARG USERNAME=appuser
+ARG USER_UID=1000
+ARG USER_GID=1000
+# ARG defines build-time variables
+# Can be overridden: docker build --build-arg APP_VERSION=2.0.0
+# Not available in running container (only during build)
+
+
+# ==============================================================================
+# 4. ENV - Environment Variables
+# ==============================================================================
+ENV APP_HOME=/app \
+    APP_ENV=production \
+    APP_VERSION=${APP_VERSION} \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=America/New_York
+# ENV sets environment variables (available at build AND runtime)
+# Use backslash for multi-line
+# ${APP_VERSION} references ARG variable
+
+
+# ==============================================================================
+# 5. WORKDIR - Set Working Directory
+# ==============================================================================
+WORKDIR /tmp
+# WORKDIR sets the working directory for subsequent instructions
+# Creates directory if it doesn't exist
+# Like 'cd' command in Linux
+
+# You can use WORKDIR multiple times
+WORKDIR /app
+# Now working directory is /app
+
+
+# ==============================================================================
+# 6. RUN - Execute Commands During Build
+# ==============================================================================
+
+# RUN - Shell form (runs in shell: /bin/sh -c)
+RUN apt-get update
+
+# RUN - Multiple commands with && (single layer, efficient)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        wget \
+        vim \
+        git \
+        build-essential \
+        python3 \
+        python3-pip \
+        python3-venv \
+        nodejs \
+        npm \
+        openjdk-17-jdk \
+        maven \
+        nginx \
+        supervisor \
+        ca-certificates \
+        tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+# Best practice: Update, install, clean up in ONE RUN command
+# Reduces image layers and size
+
+# RUN - Exec form (does NOT invoke shell)
+RUN ["apt-get", "update"]
+# Use exec form when you don't need shell features
+
+# RUN - Create directories
+RUN mkdir -p /app/data /app/logs /app/config /app/tmp
+
+# RUN - Download and install
+RUN wget -O /tmp/app.tar.gz https://example.com/app.tar.gz || echo "Download skipped for demo"
+
+
+# ==============================================================================
+# 7. COPY - Copy Files from Host to Image
+# ==============================================================================
+
+# COPY - Basic usage
+COPY app.py /app/
+# Copies app.py from build context to /app/ in image
+
+# COPY - Copy multiple files
+COPY file1.txt file2.txt /app/
+# Last argument must be destination directory
+
+# COPY - Copy directory
+COPY src/ /app/src/
+# Copies contents of src/ directory
+
+# COPY - With wildcard
+COPY *.py /app/
+COPY config/*.json /app/config/
+
+# COPY - With --chown flag (set ownership)
+COPY --chown=${USER_UID}:${USER_GID} app/ /app/
+# Sets ownership during copy (more efficient than RUN chown)
+
+# COPY - Preserve timestamps
+COPY --chown=1000:1000 --chmod=755 scripts/*.sh /app/scripts/
+
+
+# ==============================================================================
+# 8. ADD - Copy with Auto-extraction and URL Support
+# ==============================================================================
+
+# ADD - Extract tar archive automatically
+ADD --chown=${USER_UID}:${USER_GID} app-bundle.tar.gz /app/
+# Automatically extracts tar, tar.gz, tar.bz2, tar.xz, zip
+
+# ADD - Download from URL (not recommended, use RUN wget instead)
+# ADD https://example.com/file.jar /app/lib/
+# Better: RUN wget https://example.com/file.jar -O /app/lib/file.jar
+
+# ADD - Multiple files
+ADD config.tar.gz assets.tar.gz /app/
+
+# ADD - With --checksum flag (Docker 23.0+)
+# ADD --checksum=sha256:abc123... https://example.com/file /app/
+
+# Note: Prefer COPY over ADD unless you need:
+# 1. Automatic tar extraction
+# 2. URL downloads
+
+
+# ==============================================================================
+# 9. USER - Set User and Group
+# ==============================================================================
+
+# Create non-root user (as root)
+RUN groupadd -r -g ${USER_GID} ${USERNAME} && \
+    useradd -r -u ${USER_UID} -g ${USERNAME} -m -s /bin/bash ${USERNAME} && \
+    chown -R ${USERNAME}:${USERNAME} /app
+
+# Switch to non-root user
+USER ${USERNAME}
+# All subsequent RUN, CMD, ENTRYPOINT run as this user
+# Security best practice: don't run as root
+
+# You can switch back to root if needed
+USER root
+RUN apt-get update
+USER ${USERNAME}
+
+
+# ==============================================================================
+# 10. EXPOSE - Document Network Ports
+# ==============================================================================
+EXPOSE 8080
+EXPOSE 8443
+EXPOSE 9090/tcp
+EXPOSE 9091/udp
+# EXPOSE documents which ports the container listens on
+# Does NOT actually publish ports (use -p flag with docker run)
+# Metadata for documentation and linking
+
+
+# ==============================================================================
+# 11. VOLUME - Create Mount Points
+# ==============================================================================
+VOLUME ["/app/data"]
+VOLUME ["/app/logs"]
+VOLUME /app/config
+# VOLUME creates mount point for persistent storage
+# Data in these directories persists even when container stops
+# Can be mounted with -v flag: docker run -v mydata:/app/data
+
+
+# ==============================================================================
+# 12. STOPSIGNAL - Signal to Stop Container
+# ==============================================================================
+STOPSIGNAL SIGTERM
+# STOPSIGNAL sets system call signal to stop container
+# Default is SIGTERM
+# Options: SIGTERM, SIGKILL, SIGINT, etc.
+
+
+# ==============================================================================
+# 13. HEALTHCHECK - Container Health Monitoring
+# ==============================================================================
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+# HEALTHCHECK monitors container health
+# --interval: Time between checks
+# --timeout: Maximum time for check
+# --start-period: Grace period before first check
+# --retries: Consecutive failures before unhealthy
+# CMD: Command to run (exit 0 = healthy, exit 1 = unhealthy)
+
+# Alternative healthcheck examples:
+# HEALTHCHECK CMD curl -f http://localhost/ || exit 1
+# HEALTHCHECK CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+# HEALTHCHECK CMD python -c "import requests; requests.get('http://localhost:8080/health')" || exit 1
+
+# Disable healthcheck:
+# HEALTHCHECK NONE
+
+
+# ==============================================================================
+# 14. SHELL - Change Default Shell
+# ==============================================================================
+SHELL ["/bin/bash", "-c"]
+# SHELL changes default shell for RUN commands
+# Default: ["/bin/sh", "-c"] on Linux
+# Useful for Windows containers or when you need bash features
+
+# Now RUN commands use bash
+RUN echo "This runs in bash: $BASH_VERSION"
+
+# Reset to sh
+SHELL ["/bin/sh", "-c"]
+
+
+# ==============================================================================
+# 15. ONBUILD - Trigger Instructions for Child Images
+# ==============================================================================
+ONBUILD COPY . /app/src/
+ONBUILD RUN make /app/src
+# ONBUILD adds trigger instruction to the image
+# Executes when this image is used as base (FROM) in another Dockerfile
+# Useful for creating base images for teams
+
+
+# ==============================================================================
+# Multi-Stage Build Example
+# ==============================================================================
+
+# Build Stage
+FROM node:18-alpine AS builder
+WORKDIR /build
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build && npm run test
+
+# Production Stage
+FROM nginx:alpine AS production
+
+# Copy from builder stage
+COPY --from=builder /build/dist /usr/share/nginx/html
+
+# Copy nginx config
+COPY nginx.conf /etc/nginx/nginx.conf
+
+USER nginx
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
+
+
+# ==============================================================================
+# Final Production Stage with All Instructions
+# ==============================================================================
+FROM python:3.11-slim AS final
+
+# Labels
+LABEL stage="final"
+LABEL environment="production"
+
+# Build arguments
+ARG APP_VERSION=1.0.0
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Environment variables
+ENV APP_HOME=/app \
+    APP_USER=appuser \
+    APP_VERSION=${APP_VERSION} \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/app/venv/bin:$PATH"
+
+# Working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy application files
+COPY --chown=1000:1000 requirements.txt .
+COPY --chown=1000:1000 app/ ./app/
+COPY --chown=1000:1000 scripts/*.sh ./scripts/
+
+# Add compressed assets (auto-extracts)
+ADD --chown=1000:1000 static-assets.tar.gz /app/static/
+
+# Install Python dependencies
+RUN python -m venv venv && \
+    venv/bin/pip install --no-cache-dir -r requirements.txt
+
+# Create non-root user
+RUN groupadd -r -g 1000 appuser && \
+    useradd -r -u 1000 -g appuser -m -s /bin/bash appuser && \
+    chown -R appuser:appuser /app && \
+    chmod +x /app/scripts/*.sh
+
+# Switch to non-root user
+USER appuser
+
+# Expose ports
+EXPOSE 8000 8001
+
+# Create volume mount points
+VOLUME ["/app/data", "/app/logs"]
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Stop signal
+STOPSIGNAL SIGTERM
+
+# Metadata
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${APP_VERSION}"
+
+
+# ==============================================================================
+# 16. CMD - Default Command (can be overridden)
+# ==============================================================================
+
+# CMD - Exec form (preferred)
+CMD ["python", "-m", "app.main"]
+# Runs when container starts
+# Can be overridden: docker run myimage python other_script.py
+
+# CMD - Shell form
+# CMD python -m app.main
+# Runs as: /bin/sh -c "python -m app.main"
+
+# CMD - As parameters to ENTRYPOINT
+# CMD ["--port", "8000"]
+# If ENTRYPOINT is set, CMD provides default arguments
+
+
+# ==============================================================================
+# 17. ENTRYPOINT - Main Executable (harder to override)
+# ==============================================================================
+
+# ENTRYPOINT - Exec form (preferred)
+ENTRYPOINT ["python", "-m", "app.main"]
+# Container always runs this command
+# CMD arguments are appended
+# Override with: docker run --entrypoint
+
+# ENTRYPOINT - Shell form
+# ENTRYPOINT python -m app.main
+
+# Common pattern: ENTRYPOINT + CMD
+# ENTRYPOINT ["python"]
+# CMD ["app.py"]
+# Result: python app.py
+# Can override CMD: docker run myimage other.py
+# Result: python other.py
+
+
+# ==============================================================================
+# Summary of All Docker Instructions
+# ==============================================================================
+# 1.  FROM        - Base image (required, first instruction)
+# 2.  LABEL       - Metadata (key-value pairs)
+# 3.  ARG         - Build-time variables (not in runtime)
+# 4.  ENV         - Environment variables (build + runtime)
+# 5.  WORKDIR     - Set working directory
+# 6.  RUN         - Execute commands during build
+# 7.  COPY        - Copy files from host to image
+# 8.  ADD         - Copy with auto-extraction and URL support
+# 9.  USER        - Set user and group
+# 10. EXPOSE      - Document network ports
+# 11. VOLUME      - Create mount points for persistence
+# 12. STOPSIGNAL  - Signal to stop container
+# 13. HEALTHCHECK - Monitor container health
+# 14. SHELL       - Change default shell
+# 15. ONBUILD     - Trigger for child images
+# 16. CMD         - Default command (can be overridden)
+# 17. ENTRYPOINT  - Main executable (harder to override)
+
+
+# ==============================================================================
+# Best Practices Applied in This Dockerfile
+# ==============================================================================
+# ✅ Use specific image versions (not 'latest')
+# ✅ Multi-stage builds for smaller images
+# ✅ Combine RUN commands to reduce layers
+# ✅ Clean up package manager caches
+# ✅ Run as non-root user (security)
+# ✅ Use COPY instead of ADD (unless extraction needed)
+# ✅ Add health checks
+# ✅ Set appropriate stop signals
+# ✅ Use .dockerignore to reduce build context
+# ✅ Label images with metadata
+# ✅ Use build arguments for flexibility
+# ✅ Set up proper logging (PYTHONUNBUFFERED)
+# ✅ Create volumes for persistent data
+# ✅ Document exposed ports
+# ✅ Use --chown in COPY/ADD (efficient)
+# ✅ Order instructions for optimal caching
+
+
+# ==============================================================================
+# Build This Dockerfile
+# ==============================================================================
+# docker build -t comprehensive-app:latest \
+#   --build-arg APP_VERSION=1.0.0 \
+#   --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+#   --build-arg VCS_REF=$(git rev-parse --short HEAD) \
+#   -f comprehensive-dockerfile-all-instructions .
+
+
+# ==============================================================================
+# Run Container from This Image
+# ==============================================================================
+# docker run -d \
+#   --name myapp \
+#   -p 8000:8000 \
+#   -v mydata:/app/data \
+#   -v mylogs:/app/logs \
+#   -e APP_ENV=production \
+#   --health-cmd="curl -f http://localhost:8000/health || exit 1" \
+#   --health-interval=30s \
+#   --health-timeout=3s \
+#   --health-retries=3 \
+#   comprehensive-app:latest
+
+
+# ==============================================================================
+# Inspect the Image
+# ==============================================================================
+# docker inspect comprehensive-app:latest
+# docker history comprehensive-app:latest
+# docker image ls comprehensive-app:latest
+
+
+# ==============================================================================
+# End of Comprehensive Dockerfile
+# ==============================================================================

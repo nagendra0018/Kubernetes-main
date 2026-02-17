@@ -1,0 +1,152 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dcn-alerts
+  namespace: dcn
+  labels:
+    app: dcn
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: dcn_service_alerts
+    interval: 30s
+    rules:
+    # Collector service down
+    - alert: DCNCollectorDown
+      expr: up{job="dcn-collector"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        component: collector
+      annotations:
+        summary: "DCN Collector service is down"
+        description: "DCN Collector {{ $labels.pod }} has been down for more than 2 minutes"
+    
+    # API service down
+    - alert: DCNAPIDown
+      expr: up{job="dcn-api"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        component: api
+      annotations:
+        summary: "DCN API service is down"
+        description: "DCN API {{ $labels.pod }} has been down for more than 2 minutes"
+    
+    # High API error rate
+    - alert: DCNHighAPIErrorRate
+      expr: |
+        (
+          sum(rate(dcn_api_requests_total{status=~"5.."}[5m])) by (endpoint)
+          /
+          sum(rate(dcn_api_requests_total[5m])) by (endpoint)
+        ) * 100 > 5
+      for: 5m
+      labels:
+        severity: warning
+        component: api
+      annotations:
+        summary: "High error rate on DCN API"
+        description: "API endpoint {{ $labels.endpoint }} has error rate {{ $value }}% (threshold: 5%)"
+    
+    # Slow API response
+    - alert: DCNSlowAPIResponse
+      expr: |
+        histogram_quantile(0.95,
+          rate(dcn_api_request_duration_seconds_bucket[5m])
+        ) > 1
+      for: 5m
+      labels:
+        severity: warning
+        component: api
+      annotations:
+        summary: "Slow API response time"
+        description: "95th percentile response time is {{ $value }}s (threshold: 1s)"
+    
+    # High memory usage
+    - alert: DCNHighMemoryUsage
+      expr: |
+        (
+          container_memory_usage_bytes{namespace="dcn",pod=~"dcn-.*"}
+          /
+          container_spec_memory_limit_bytes{namespace="dcn",pod=~"dcn-.*"}
+        ) * 100 > 80
+      for: 10m
+      labels:
+        severity: warning
+        component: infrastructure
+      annotations:
+        summary: "High memory usage in DCN services"
+        description: "Pod {{ $labels.pod }} memory usage is {{ $value }}%"
+    
+    # High CPU usage
+    - alert: DCNHighCPUUsage
+      expr: |
+        (
+          rate(container_cpu_usage_seconds_total{namespace="dcn",pod=~"dcn-.*"}[5m])
+          * 100
+        ) > 80
+      for: 10m
+      labels:
+        severity: warning
+        component: infrastructure
+      annotations:
+        summary: "High CPU usage in DCN services"
+        description: "Pod {{ $labels.pod }} CPU usage is {{ $value }}%"
+    
+    # Data collection lag
+    - alert: DCNDataCollectionLag
+      expr: |
+        (
+          time() - max(dcn_data_last_collection_timestamp) by (collector)
+        ) > 300
+      for: 5m
+      labels:
+        severity: warning
+        component: collector
+      annotations:
+        summary: "Data collection lag detected"
+        description: "Collector {{ $labels.collector }} hasn't collected data for {{ $value }}s"
+    
+    # Database connection pool exhaustion
+    - alert: DCNDatabasePoolExhaustion
+      expr: |
+        (
+          dcn_database_pool_connections_used
+          /
+          dcn_database_pool_connections_max
+        ) * 100 > 90
+      for: 5m
+      labels:
+        severity: warning
+        component: database
+      annotations:
+        summary: "Database connection pool near exhaustion"
+        description: "Database pool usage is {{ $value }}%"
+    
+    # Kafka consumer lag
+    - alert: DCNKafkaConsumerLag
+      expr: kafka_consumergroup_lag{topic="dcn-metrics"} > 10000
+      for: 10m
+      labels:
+        severity: warning
+        component: kafka
+      annotations:
+        summary: "High Kafka consumer lag"
+        description: "Consumer group {{ $labels.consumergroup }} has lag of {{ $value }} messages"
+    
+    # Disk space low
+    - alert: DCNDiskSpaceLow
+      expr: |
+        (
+          kubelet_volume_stats_available_bytes{namespace="dcn"}
+          /
+          kubelet_volume_stats_capacity_bytes{namespace="dcn"}
+        ) * 100 < 15
+      for: 10m
+      labels:
+        severity: critical
+        component: infrastructure
+      annotations:
+        summary: "Low disk space on DCN volumes"
+        description: "Volume {{ $labels.persistentvolumeclaim }} has {{ $value }}% space remaining"

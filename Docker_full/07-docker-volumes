@@ -1,0 +1,422 @@
+# Docker Volumes and Storage
+
+## 1. Named Volumes (Recommended)
+# Create named volume
+docker volume create myapp-data
+
+# Use in container
+docker run -d \
+  --name app \
+  -v myapp-data:/app/data \
+  myapp
+
+# Docker Compose
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - app-data:/app/data
+      - logs:/app/logs
+
+volumes:
+  app-data:
+    driver: local
+  logs:
+    driver: local
+
+
+## 2. Bind Mounts
+# Mount host directory
+docker run -d \
+  --name app \
+  -v /host/path:/container/path \
+  -v /host/config.yml:/app/config.yml:ro \
+  myapp
+
+# Docker Compose
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - ./app:/app                    # Development
+      - ./config:/config:ro            # Read-only
+      - /var/log/myapp:/app/logs       # Logs
+      - ./ssl:/etc/ssl/certs:ro        # Certificates
+
+
+## 3. Tmpfs Mounts (In-Memory Storage)
+# Create tmpfs mount
+docker run -d \
+  --name app \
+  --tmpfs /app/tmp:rw,size=100m,mode=1777 \
+  myapp
+
+# Docker Compose
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    tmpfs:
+      - /tmp
+      - /app/cache:size=512M,mode=1777
+
+
+## 4. Volume Drivers
+# Local driver (default)
+docker volume create --driver local myapp-data
+
+# NFS volume
+docker volume create --driver local \
+  --opt type=nfs \
+  --opt o=addr=192.168.1.100,rw \
+  --opt device=:/path/to/export \
+  nfs-volume
+
+# CIFS/SMB volume
+docker volume create --driver local \
+  --opt type=cifs \
+  --opt o=username=user,password=pass,vers=3.0 \
+  --opt device=//server/share \
+  smb-volume
+
+# Docker Compose with NFS
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - nfs-data:/app/data
+
+volumes:
+  nfs-data:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=192.168.1.100,nolock,soft,rw
+      device: ":/exports/data"
+
+
+## 5. Volume Plugins (Third-Party)
+# AWS EBS
+docker volume create --driver rexray/ebs \
+  --opt size=100 \
+  --opt volumetype=gp3 \
+  ebs-volume
+
+# GlusterFS
+docker volume create --driver glusterfs \
+  --opt voluri="gluster-server:volume-name" \
+  gluster-volume
+
+# Portworx
+docker volume create --driver pxd \
+  --opt size=100G \
+  --opt repl=3 \
+  px-volume
+
+
+## 6. Backup and Restore
+# Backup volume
+docker run --rm \
+  -v myapp-data:/data \
+  -v $(pwd):/backup \
+  alpine \
+  tar czf /backup/myapp-data-backup.tar.gz -C /data .
+
+# Restore volume
+docker run --rm \
+  -v myapp-data:/data \
+  -v $(pwd):/backup \
+  alpine \
+  tar xzf /backup/myapp-data-backup.tar.gz -C /data
+
+# Docker Compose backup service
+version: '3.9'
+
+services:
+  backup:
+    image: alpine
+    volumes:
+      - app-data:/data:ro
+      - ./backups:/backup
+    command: >
+      sh -c "tar czf /backup/backup-$$(date +%Y%m%d-%H%M%S).tar.gz -C /data . && 
+             find /backup -name '*.tar.gz' -mtime +7 -delete"
+
+volumes:
+  app-data:
+    external: true
+
+
+## 7. Database Persistent Storage
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./backups:/backups
+    environment:
+      - POSTGRES_PASSWORD=secret
+
+  mysql:
+    image: mysql:8
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/conf:/etc/mysql/conf.d:ro
+    environment:
+      - MYSQL_ROOT_PASSWORD=secret
+
+  mongodb:
+    image: mongo:7
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+    command: --wiredTigerCacheSizeGB 1.5
+
+  redis:
+    image: redis:7
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+volumes:
+  postgres-data:
+    driver: local
+  mysql-data:
+    driver: local
+  mongodb-data:
+    driver: local
+  mongodb-config:
+    driver: local
+  redis-data:
+    driver: local
+
+
+## 8. Shared Volumes Between Containers
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - shared-data:/data
+
+  worker:
+    image: myapp-worker
+    volumes:
+      - shared-data:/data
+
+  nginx:
+    image: nginx
+    volumes:
+      - shared-data:/usr/share/nginx/html:ro
+
+volumes:
+  shared-data:
+    driver: local
+
+
+## 9. Volume Lifecycle Management
+# Create volume with labels
+docker volume create \
+  --label environment=production \
+  --label app=myapp \
+  myapp-data
+
+# List volumes with filter
+docker volume ls --filter label=app=myapp
+
+# Prune unused volumes
+docker volume prune
+
+# Remove specific volume
+docker volume rm myapp-data
+
+# Docker Compose volume with options
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - app-data:/app/data
+
+volumes:
+  app-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /host/path
+    labels:
+      com.example.description: "Application data volume"
+      com.example.environment: "production"
+
+
+## 10. Read-Only and Cached Volumes
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      # Read-only
+      - ./config:/app/config:ro
+      
+      # Cached (for macOS/Windows)
+      - ./src:/app/src:cached
+      
+      # Delegated (for performance)
+      - ./logs:/app/logs:delegated
+      
+      # Consistent (default)
+      - app-data:/app/data:consistent
+
+volumes:
+  app-data:
+    driver: local
+
+
+## 11. Volume Permissions and Ownership
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    user: "1000:1000"
+    volumes:
+      - app-data:/app/data
+
+  # Initialize volume with correct permissions
+  init:
+    image: alpine
+    volumes:
+      - app-data:/data
+    command: >
+      sh -c "chown -R 1000:1000 /data && 
+             chmod -R 755 /data"
+
+volumes:
+  app-data:
+    driver: local
+
+
+## 12. Anonymous Volumes
+# Created automatically, removed with container
+docker run -d \
+  --name app \
+  -v /app/data \
+  myapp
+
+# Docker Compose
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - /app/data  # Anonymous volume
+
+
+## 13. Volume Inspection and Monitoring
+# Inspect volume
+docker volume inspect myapp-data
+
+# Check volume size
+docker system df -v
+
+# Monitor volume usage in container
+docker exec app df -h /app/data
+
+# Docker Compose with volume size limit
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    volumes:
+      - type: volume
+        source: app-data
+        target: /app/data
+        volume:
+          nocopy: true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+volumes:
+  app-data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=1g
+
+
+## 14. Multi-Container Volume Sharing
+version: '3.9'
+
+services:
+  # Application generates files
+  app:
+    image: myapp
+    volumes:
+      - shared-files:/app/output
+
+  # Worker processes files
+  worker:
+    image: myapp-worker
+    volumes:
+      - shared-files:/app/input
+
+  # Backup service
+  backup:
+    image: alpine
+    volumes:
+      - shared-files:/data:ro
+      - ./backups:/backup
+    command: >
+      sh -c "while true; do
+        tar czf /backup/backup-$$(date +%Y%m%d-%H%M%S).tar.gz -C /data . &&
+        find /backup -name '*.tar.gz' -mtime +7 -delete &&
+        sleep 86400;
+      done"
+
+volumes:
+  shared-files:
+    driver: local
+
+
+## 15. Volume Migration
+# Export volume data
+docker run --rm \
+  -v source-volume:/from \
+  -v destination-volume:/to \
+  alpine \
+  sh -c "cp -av /from/. /to/"
+
+# Clone volume
+docker volume create target-volume
+docker run --rm \
+  -v source-volume:/source:ro \
+  -v target-volume:/target \
+  alpine \
+  sh -c "cp -av /source/. /target/"
+
+# Migrate between hosts (via tar)
+docker run --rm \
+  -v myapp-data:/data \
+  alpine \
+  tar czf - -C /data . | \
+ssh user@remote-host \
+  'docker run --rm -i -v myapp-data:/data alpine tar xzf - -C /data'

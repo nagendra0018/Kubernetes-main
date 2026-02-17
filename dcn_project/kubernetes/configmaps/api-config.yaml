@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: dcn
+  labels:
+    app: dcn-api
+data:
+  API_PORT: "8080"
+  DATABASE_URL: "postgresql://dcn:dcnpass@timescaledb:5432/dcn"
+  REDIS_URL: "redis://redis:6379"
+  CACHE_TTL: "300"
+  LOG_LEVEL: "INFO"
+  CORS_ORIGINS: "*"
+  MAX_QUERY_LIMIT: "10000"
+  DEFAULT_QUERY_LIMIT: "1000"

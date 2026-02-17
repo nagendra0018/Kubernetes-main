@@ -1,0 +1,428 @@
+pipeline {
+    agent any
+    
+    environment {
+        // Docker Registry
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_REPO = 'yourorg/cicd-demo'
+        DOCKER_CREDENTIALS = 'docker-registry-credentials'
+        
+        // Application
+        APP_NAME = 'cicd-demo'
+        APP_VERSION = "${env.BUILD_NUMBER}"
+        
+        // Kubernetes
+        K8S_DEV_CREDENTIALS = 'k8s-dev-credentials'
+        K8S_TEST_CREDENTIALS = 'k8s-test-credentials'
+        K8S_PROD_CREDENTIALS = 'k8s-prod-credentials'
+        
+        // SonarQube
+        SONARQUBE_URL = 'http://sonarqube:9000'
+        SONARQUBE_TOKEN = credentials('sonarqube-token')
+        
+        // Slack
+        SLACK_CHANNEL = '#cicd-notifications'
+    }
+    
+    options {
+        timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        disableConcurrentBuilds()
+    }
+    
+    stages {
+        stage('📥 Checkout') {
+            steps {
+                script {
+                    echo '🔄 Checking out code from repository...'
+                    checkout scm
+                    
+                    // Get commit info
+                    env.GIT_COMMIT_MSG = sh(
+                        script: 'git log -1 --pretty=%B',
+                        returnStdout: true
+                    ).trim()
+                    
+                    env.GIT_AUTHOR = sh(
+                        script: 'git log -1 --pretty=%an',
+                        returnStdout: true
+                    ).trim()
+                }
+            }
+        }
+        
+        stage('🔍 Code Analysis') {
+            parallel {
+                stage('Linting') {
+                    steps {
+                        script {
+                            echo '🔍 Running code linting...'
+                            sh '''
+                                cd application
+                                pip install pylint flake8
+                                pylint src/**/*.py || true
+                                flake8 src/ --max-line-length=120 || true
+                            '''
+                        }
+                    }
+                }
+                
+                stage('SonarQube') {
+                    steps {
+                        script {
+                            echo '📊 Running SonarQube analysis...'
+                            withSonarQubeEnv('SonarQube') {
+                                sh '''
+                                    sonar-scanner \
+                                      -Dsonar.projectKey=${APP_NAME} \
+                                      -Dsonar.sources=application/src \
+                                      -Dsonar.host.url=${SONARQUBE_URL} \
+                                      -Dsonar.login=${SONARQUBE_TOKEN}
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Unit Tests') {
+            steps {
+                script {
+                    echo '🧪 Running unit tests...'
+                    sh '''
+                        cd application
+                        pip install -r requirements.txt
+                        pytest tests/ --cov=src --cov-report=xml --cov-report=html --junitxml=test-results.xml
+                    '''
+                }
+            }
+            post {
+                always {
+                    junit 'application/test-results.xml'
+                    publishHTML(target: [
+                        reportDir: 'application/htmlcov',
+                        reportFiles: 'index.html',
+                        reportName: 'Coverage Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('🏗️ Build Docker Image') {
+            steps {
+                script {
+                    echo '🏗️ Building Docker image...'
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", DOCKER_CREDENTIALS) {
+                        def customImage = docker.build(
+                            "${DOCKER_REPO}:${APP_VERSION}",
+                            "-f application/Dockerfile application/"
+                        )
+                        
+                        // Tag with latest
+                        customImage.push()
+                        customImage.push('latest')
+                        
+                        // Tag with git commit
+                        def gitCommit = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+                        customImage.push(gitCommit)
+                    }
+                }
+            }
+        }
+        
+        stage('🔒 Security Scan') {
+            parallel {
+                stage('Trivy Scan') {
+                    steps {
+                        script {
+                            echo '🔒 Running Trivy security scan...'
+                            sh '''
+                                trivy image \
+                                  --severity HIGH,CRITICAL \
+                                  --format json \
+                                  --output trivy-report.json \
+                                  ${DOCKER_REPO}:${APP_VERSION} || true
+                            '''
+                        }
+                    }
+                }
+                
+                stage('Dependency Check') {
+                    steps {
+                        script {
+                            echo '🔍 Checking dependencies for vulnerabilities...'
+                            sh '''
+                                pip install safety
+                                safety check --file application/requirements.txt --json > safety-report.json || true
+                            '''
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: '*-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('🚀 Deploy to Dev') {
+            steps {
+                script {
+                    echo '🚀 Deploying to Development environment...'
+                    withKubeConfig([credentialsId: K8S_DEV_CREDENTIALS]) {
+                        sh '''
+                            # Update image in deployment
+                            kubectl set image deployment/${APP_NAME} \
+                              ${APP_NAME}=${DOCKER_REPO}:${APP_VERSION} \
+                              -n dev
+                            
+                            # Wait for rollout
+                            kubectl rollout status deployment/${APP_NAME} -n dev --timeout=5m
+                            
+                            # Verify deployment
+                            kubectl get pods -n dev -l app=${APP_NAME}
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Smoke Tests - Dev') {
+            steps {
+                script {
+                    echo '🧪 Running smoke tests on Dev environment...'
+                    sh '''
+                        # Get service endpoint
+                        DEV_URL=$(kubectl get svc ${APP_NAME} -n dev -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        
+                        # Health check
+                        curl -f http://${DEV_URL}/health || exit 1
+                        
+                        # API test
+                        curl -f http://${DEV_URL}/api/users || exit 1
+                    '''
+                }
+            }
+        }
+        
+        stage('⏸️ Approval for Test') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    timeout(time: 1, unit: 'HOURS') {
+                        input message: 'Deploy to Test environment?', 
+                              ok: 'Deploy',
+                              submitter: 'devops-team'
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Deploy to Test') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    echo '🚀 Deploying to Test environment...'
+                    withKubeConfig([credentialsId: K8S_TEST_CREDENTIALS]) {
+                        sh '''
+                            kubectl set image deployment/${APP_NAME} \
+                              ${APP_NAME}=${DOCKER_REPO}:${APP_VERSION} \
+                              -n test
+                            
+                            kubectl rollout status deployment/${APP_NAME} -n test --timeout=5m
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('🧪 Integration Tests - Test') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                script {
+                    echo '🧪 Running integration tests on Test environment...'
+                    sh '''
+                        # Run integration test suite
+                        cd application/tests
+                        pytest integration/ --junitxml=integration-results.xml || true
+                    '''
+                }
+            }
+        }
+        
+        stage('⏸️ Approval for Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    timeout(time: 4, unit: 'HOURS') {
+                        input message: 'Deploy to Production?', 
+                              ok: 'Deploy',
+                              submitter: 'devops-lead,cto'
+                    }
+                }
+            }
+        }
+        
+        stage('🚀 Deploy to Production - Canary') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '🚀 Deploying Canary release to Production (10%)...'
+                    withKubeConfig([credentialsId: K8S_PROD_CREDENTIALS]) {
+                        sh '''
+                            # Deploy canary with 10% traffic
+                            ansible-playbook \
+                              ansible/playbooks/deploy-canary.yml \
+                              -i ansible/inventory/prod.ini \
+                              -e "image_tag=${APP_VERSION}" \
+                              -e "canary_weight=10"
+                            
+                            # Wait and monitor
+                            sleep 300
+                        '''
+                    }
+                    
+                    echo '⏳ Monitoring canary deployment for 5 minutes...'
+                    // Add monitoring checks here
+                }
+            }
+        }
+        
+        stage('📊 Canary Analysis') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '📊 Analyzing canary metrics...'
+                    sh '''
+                        # Query Prometheus for error rate
+                        ERROR_RATE=$(curl -s "http://prometheus:9090/api/v1/query?query=rate(http_requests_total{status=~'5..'}[5m])" | jq '.data.result[0].value[1]')
+                        
+                        # Check if error rate is acceptable
+                        if (( $(echo "$ERROR_RATE > 0.05" | bc -l) )); then
+                            echo "ERROR: Canary error rate too high: $ERROR_RATE"
+                            exit 1
+                        fi
+                    '''
+                }
+            }
+        }
+        
+        stage('🚀 Deploy to Production - Full') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '🚀 Rolling out full Production deployment...'
+                    withKubeConfig([credentialsId: K8S_PROD_CREDENTIALS]) {
+                        sh '''
+                            # Full rollout with blue-green strategy
+                            ansible-playbook \
+                              ansible/playbooks/deploy-to-k8s.yml \
+                              -i ansible/inventory/prod.ini \
+                              -e "image_tag=${APP_VERSION}" \
+                              -e "environment=prod"
+                            
+                            # Verify deployment
+                            kubectl rollout status deployment/${APP_NAME} -n prod --timeout=10m
+                        '''
+                    }
+                }
+            }
+        }
+        
+        stage('✅ Post-Deployment Validation') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    echo '✅ Validating production deployment...'
+                    sh '''
+                        PROD_URL=$(kubectl get svc ${APP_NAME} -n prod -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+                        
+                        # Health checks
+                        for i in {1..5}; do
+                            curl -f http://${PROD_URL}/health || exit 1
+                            sleep 5
+                        done
+                        
+                        # Smoke tests
+                        curl -f http://${PROD_URL}/api/users
+                        curl -f http://${PROD_URL}/api/info
+                    '''
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            script {
+                echo '✅ Pipeline completed successfully!'
+                // Send Slack notification
+                slackSend(
+                    channel: SLACK_CHANNEL,
+                    color: 'good',
+                    message: """
+                        ✅ *Deployment Successful*
+                        *Project:* ${APP_NAME}
+                        *Version:* ${APP_VERSION}
+                        *Branch:* ${env.BRANCH_NAME}
+                        *Commit:* ${env.GIT_COMMIT_MSG}
+                        *Author:* ${env.GIT_AUTHOR}
+                        *Build:* ${env.BUILD_URL}
+                    """
+                )
+            }
+        }
+        
+        failure {
+            script {
+                echo '❌ Pipeline failed!'
+                // Send Slack notification
+                slackSend(
+                    channel: SLACK_CHANNEL,
+                    color: 'danger',
+                    message: """
+                        ❌ *Deployment Failed*
+                        *Project:* ${APP_NAME}
+                        *Version:* ${APP_VERSION}
+                        *Branch:* ${env.BRANCH_NAME}
+                        *Stage:* ${env.STAGE_NAME}
+                        *Build:* ${env.BUILD_URL}
+                    """
+                )
+                
+                // Rollback if production deployment failed
+                if (env.BRANCH_NAME == 'main') {
+                    echo '🔄 Initiating automatic rollback...'
+                    sh '''
+                        ansible-playbook \
+                          ansible/playbooks/rollback.yml \
+                          -i ansible/inventory/prod.ini
+                    '''
+                }
+            }
+        }
+        
+        always {
+            cleanWs()
+        }
+    }
+}

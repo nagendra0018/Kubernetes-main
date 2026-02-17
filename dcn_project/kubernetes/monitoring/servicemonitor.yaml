@@ -1,0 +1,33 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcn-collector-monitor
+  namespace: dcn
+  labels:
+    app: dcn-collector
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: dcn-collector
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcn-api-monitor
+  namespace: dcn
+  labels:
+    app: dcn-api
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: dcn-api
+  endpoints:
+  - port: http
+    interval: 30s
+    path: /metrics

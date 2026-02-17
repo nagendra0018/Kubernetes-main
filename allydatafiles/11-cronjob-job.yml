@@ -1,0 +1,149 @@
+---
+# CronJob for database backup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup-cronjob
+  namespace: production
+spec:
+  schedule: "0 2 * * *" # Every day at 2 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: db-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:15-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  BACKUP_FILE="/backup/backup-$(date +%Y%m%d-%H%M%S).sql.gz"
+                  pg_dump -h postgres-service -U $DB_USER -d $DB_NAME | gzip > $BACKUP_FILE
+                  echo "Backup completed: $BACKUP_FILE"
+                  # Upload to S3 (if aws cli is available)
+                  # aws s3 cp $BACKUP_FILE s3://my-backups/postgres/
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: app-secrets
+                      key: DB_PASSWORD
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: app-secrets
+                      key: DB_USER
+                - name: DB_NAME
+                  value: "myappdb"
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: backup-pvc
+
+---
+# CronJob for cache cleanup
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cache-cleanup-cronjob
+  namespace: production
+spec:
+  schedule: "*/30 * * * *" # Every 30 minutes
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: cleanup
+              image: redis:7-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  redis-cli -h redis-service -a $REDIS_PASSWORD --scan --pattern "temp:*" | xargs redis-cli -h redis-service -a $REDIS_PASSWORD del
+                  echo "Cache cleanup completed"
+              env:
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: app-secrets
+                      key: REDIS_PASSWORD
+
+---
+# Job for database migration
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migration-job
+  namespace: production
+spec:
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        app: db-migration
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: myapp:v1.0.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Running database migrations..."
+              # Run your migration scripts here
+              # python manage.py migrate
+              # or
+              # flyway migrate
+              echo "Migrations completed successfully"
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+---
+# PVC for backups
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: production
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 50Gi

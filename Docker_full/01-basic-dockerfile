@@ -1,0 +1,299 @@
+# Basic Dockerfile Examples
+
+## 1. Simple Python Application
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["python", "app.py"]
+
+
+## 1b. Python Application with ADD (Auto-extraction)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# ADD can extract tar archives automatically
+ADD app.tar.gz /app/
+
+# ADD can download from URLs (not recommended in production)
+# ADD https://example.com/requirements.txt .
+
+# For local files, prefer COPY over ADD
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+EXPOSE 8000
+
+CMD ["python", "app.py"]
+
+# Note: Use COPY for simple file/directory copies
+# Use ADD only when you need:
+# - Automatic tar/gzip extraction
+# - URL downloads (better to use RUN curl/wget for clarity)
+
+
+## 2. Node.js Application
+FROM node:18-alpine
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+
+EXPOSE 3000
+
+USER node
+
+CMD ["node", "server.js"]
+
+
+## 3. Java Spring Boot Application
+FROM maven:3.9-eclipse-temurin-17 AS build
+
+WORKDIR /app
+
+COPY pom.xml .
+COPY src ./src
+
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:17-jre-alpine
+
+WORKDIR /app
+
+COPY --from=build /app/target/*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+
+## 4. Go Application
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+COPY --from=builder /app/main .
+
+EXPOSE 8080
+
+CMD ["./main"]
+
+
+## 5. .NET Core Application
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+
+WORKDIR /src
+
+COPY ["MyApp.csproj", "./"]
+RUN dotnet restore "MyApp.csproj"
+
+COPY . .
+RUN dotnet build "MyApp.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "MyApp.csproj" -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
+
+WORKDIR /app
+
+COPY --from=publish /app/publish .
+
+EXPOSE 80
+EXPOSE 443
+
+ENTRYPOINT ["dotnet", "MyApp.dll"]
+
+
+## 6. ADD Instruction Examples and Use Cases
+
+### 6a. Using ADD for Archive Extraction
+FROM ubuntu:22.04
+
+WORKDIR /app
+
+# ADD automatically extracts tar, gzip, bzip2, xz archives
+ADD application.tar.gz /app/
+ADD config.tar /etc/app/config/
+ADD dependencies.tar.xz /usr/local/lib/
+
+# Verify extraction
+RUN ls -la /app
+
+CMD ["./start.sh"]
+
+
+### 6b. Using ADD to Download from URL
+FROM alpine:3.19
+
+WORKDIR /app
+
+# ADD can download files from URLs (use with caution)
+ADD https://example.com/app.jar /app/app.jar
+ADD https://github.com/user/repo/archive/refs/tags/v1.0.tar.gz /tmp/
+
+# Better practice: Use RUN with curl/wget for transparency
+RUN wget -O /app/config.json https://example.com/config.json
+
+# Set permissions after ADD
+RUN chmod +x /app/app.jar
+
+CMD ["java", "-jar", "app.jar"]
+
+
+### 6c. ADD vs COPY Comparison
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Use COPY for simple file/directory copies (RECOMMENDED)
+COPY package.json .
+COPY src/ ./src/
+
+# Use ADD when you need automatic extraction
+ADD node_modules.tar.gz /app/
+
+# ADD with wildcard patterns
+ADD scripts/*.sh /app/scripts/
+
+# COPY with wildcard patterns (preferred)
+COPY config/*.json /app/config/
+
+RUN npm install
+
+CMD ["node", "server.js"]
+
+
+### 6d. ADD with Ownership and Permissions
+FROM nginx:alpine
+
+WORKDIR /usr/share/nginx/html
+
+# ADD with --chown flag (Docker 17.09+)
+ADD --chown=nginx:nginx website.tar.gz /usr/share/nginx/html/
+
+# ADD multiple files
+ADD index.html about.html contact.html /usr/share/nginx/html/
+
+# ADD entire directory
+ADD static/ /usr/share/nginx/html/static/
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
+
+
+### 6e. Real-World Example: Application with Compressed Assets
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements first (for layer caching)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ADD compressed application code (auto-extracts)
+ADD --chown=1000:1000 app-bundle.tar.gz /app/
+
+# ADD compressed static assets
+ADD static-assets.tar.gz /app/static/
+
+# Download external resources (not recommended, shown for example)
+# ADD https://cdn.example.com/library.js /app/static/js/
+
+# Better approach for downloads:
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget && \
+    wget -O /app/data.json https://api.example.com/data.json && \
+    apt-get purge -y wget && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+CMD ["python", "app.py"]
+
+
+### 6f. ADD Best Practices vs Anti-Patterns
+
+# ✅ GOOD: Use COPY for local files (transparent, cacheable)
+FROM node:18-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY . .
+
+# ✅ GOOD: Use ADD for tar archive extraction
+FROM alpine:3.19
+WORKDIR /app
+ADD release.tar.gz /app/
+RUN chown -R nobody:nobody /app
+
+# ✅ GOOD: Use ADD with chown
+FROM python:3.11-slim
+ADD --chown=appuser:appuser app.tar.gz /app/
+
+# ❌ BAD: Using ADD for simple file copy
+# ADD app.py /app/  # Use COPY instead
+
+# ❌ BAD: Using ADD with URLs (security risk, not cached)
+# ADD https://example.com/file.jar /app/  # Use RUN wget/curl instead
+
+# ❌ BAD: ADD without checksum verification
+# ADD https://example.com/binary /usr/bin/  # No integrity check!
+
+# ✅ GOOD: Download with verification
+FROM alpine:3.19
+RUN wget https://example.com/binary -O /usr/bin/mybinary && \
+    echo "expected-sha256-hash /usr/bin/mybinary" | sha256sum -c && \
+    chmod +x /usr/bin/mybinary
+
+
+## 7. Key Differences: ADD vs COPY
+
+# COPY:
+# - Simple, transparent file/directory copy
+# - Recommended for most use cases
+# - Better for Docker image layer caching
+# - More predictable behavior
+# - Syntax: COPY <src> <dest>
+
+# ADD:
+# - All features of COPY, plus:
+# - Automatically extracts tar archives (tar, gzip, bzip2, xz)
+# - Can download from URLs (HTTP/HTTPS)
+# - Less explicit, can cause confusion
+# - Syntax: ADD <src> <dest>
+
+# Rule of Thumb:
+# - Use COPY by default
+# - Use ADD only when you specifically need:
+#   1. Automatic tar/gzip extraction
+#   2. Downloading from URLs (though RUN wget/curl is preferred)

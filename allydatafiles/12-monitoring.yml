@@ -1,0 +1,122 @@
+---
+# ServiceMonitor for Prometheus (requires Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: myapp-servicemonitor
+  namespace: production
+  labels:
+    app: myapp
+spec:
+  selector:
+    matchLabels:
+      app: myapp
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+
+---
+# PrometheusRule for Alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: myapp-alerts
+  namespace: production
+spec:
+  groups:
+    - name: myapp
+      interval: 30s
+      rules:
+        # High error rate alert
+        - alert: HighErrorRate
+          expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "High error rate detected"
+            description: "Error rate is {{ $value }} for {{ $labels.instance }}"
+
+        # High CPU usage
+        - alert: HighCPUUsage
+          expr: rate(container_cpu_usage_seconds_total{pod=~"myapp-.*"}[5m]) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage detected"
+            description: "CPU usage is {{ $value }} for {{ $labels.pod }}"
+
+        # High memory usage
+        - alert: HighMemoryUsage
+          expr: container_memory_usage_bytes{pod=~"myapp-.*"} / container_spec_memory_limit_bytes{pod=~"myapp-.*"} > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage detected"
+            description: "Memory usage is {{ $value }} for {{ $labels.pod }}"
+
+        # Pod not ready
+        - alert: PodNotReady
+          expr: kube_pod_status_ready{namespace="production",pod=~"myapp-.*",condition="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod is not ready"
+            description: "Pod {{ $labels.pod }} is not ready"
+
+        # Deployment replicas mismatch
+        - alert: DeploymentReplicasMismatch
+          expr: kube_deployment_spec_replicas{namespace="production",deployment="myapp-deployment"} != kube_deployment_status_replicas_available{namespace="production",deployment="myapp-deployment"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Deployment replicas mismatch"
+            description: "Deployment {{ $labels.deployment }} has {{ $value }} replicas mismatch"
+
+---
+# ConfigMap for Grafana Dashboard
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard
+  namespace: production
+  labels:
+    grafana_dashboard: "1"
+data:
+  myapp-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "MyApp Dashboard",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total[5m])"
+              }
+            ]
+          },
+          {
+            "title": "Error Rate",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{status=~\"5..\"}[5m])"
+              }
+            ]
+          },
+          {
+            "title": "Response Time",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))"
+              }
+            ]
+          }
+        ]
+      }
+    }

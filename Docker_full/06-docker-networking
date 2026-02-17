@@ -1,0 +1,372 @@
+# Docker Networking Examples
+
+## 1. Bridge Network (Default)
+# Create custom bridge network
+docker network create --driver bridge my-bridge-network
+
+# Run containers on the network
+docker run -d --name web --network my-bridge-network nginx
+docker run -d --name app --network my-bridge-network myapp
+
+# Containers can communicate using container names
+# app can reach: http://web:80
+
+
+## 2. Host Network
+# Container shares host's network stack
+docker run -d --name app --network host myapp
+
+# No port mapping needed
+# Container directly uses host ports
+
+
+## 3. Overlay Network (Multi-Host)
+# Initialize Docker Swarm
+docker swarm init
+
+# Create overlay network
+docker network create --driver overlay --attachable my-overlay-network
+
+# Deploy services
+docker service create --name web --network my-overlay-network --replicas 3 nginx
+
+
+## 4. Macvlan Network (Direct Host Network Access)
+# Create macvlan network
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 macvlan-network
+
+# Run container with IP from host subnet
+docker run -d --name app --network macvlan-network --ip=192.168.1.100 myapp
+
+
+## 5. None Network (Isolated Container)
+# No network access
+docker run -d --name isolated --network none myapp
+
+
+## 6. Docker Compose Networking
+version: '3.9'
+
+services:
+  # Frontend (Public Network)
+  frontend:
+    image: myapp-frontend
+    networks:
+      - public
+    ports:
+      - "80:80"
+
+  # Backend (Public + Private Networks)
+  backend:
+    image: myapp-backend
+    networks:
+      - public
+      - private
+    ports:
+      - "8080:8080"
+
+  # Database (Private Network Only)
+  database:
+    image: postgres:15
+    networks:
+      - private
+    environment:
+      - POSTGRES_PASSWORD=secret
+
+  # Worker (Private Network Only)
+  worker:
+    image: myapp-worker
+    networks:
+      - private
+    depends_on:
+      - database
+
+networks:
+  # Public network - accessible from outside
+  public:
+    driver: bridge
+    
+  # Private network - internal only
+  private:
+    driver: bridge
+    internal: true  # No external access
+
+
+## 7. Custom Network Configuration
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    networks:
+      app-network:
+        ipv4_address: 172.20.0.10
+        aliases:
+          - app.local
+          - api.local
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+          ip_range: 172.20.0.0/24
+    driver_opts:
+      com.docker.network.bridge.name: br-myapp
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+
+
+## 8. DNS Configuration
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    networks:
+      - app-network
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    dns_search:
+      - example.com
+    dns_opt:
+      - timeout:1
+      - attempts:2
+    extra_hosts:
+      - "api.example.com:192.168.1.100"
+      - "db.example.com:192.168.1.101"
+
+networks:
+  app-network:
+    driver: bridge
+
+
+## 9. Service Discovery
+version: '3.9'
+
+services:
+  web:
+    image: nginx
+    networks:
+      - frontend
+    deploy:
+      replicas: 3
+
+  app:
+    image: myapp
+    networks:
+      - frontend
+      - backend
+    environment:
+      # Use service name for DNS resolution
+      - WEB_URL=http://web
+      - DB_URL=postgresql://db:5432/mydb
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    networks:
+      - backend
+
+networks:
+  frontend:
+    driver: overlay
+  backend:
+    driver: overlay
+    internal: true
+
+
+## 10. Network Policies and Isolation
+version: '3.9'
+
+services:
+  # DMZ - Public facing
+  nginx:
+    image: nginx
+    networks:
+      - dmz
+      - web-tier
+    ports:
+      - "80:80"
+      - "443:443"
+
+  # Web Tier - Application servers
+  app:
+    image: myapp
+    networks:
+      - web-tier
+      - app-tier
+    deploy:
+      replicas: 3
+
+  # Application Tier - Business logic
+  api:
+    image: myapp-api
+    networks:
+      - app-tier
+      - data-tier
+
+  # Data Tier - Databases
+  postgres:
+    image: postgres:15
+    networks:
+      - data-tier
+
+  redis:
+    image: redis:7
+    networks:
+      - data-tier
+
+networks:
+  dmz:
+    driver: bridge
+    # Internet facing
+    
+  web-tier:
+    driver: bridge
+    internal: true
+    # Only nginx and app communicate
+    
+  app-tier:
+    driver: bridge
+    internal: true
+    # Only app and api communicate
+    
+  data-tier:
+    driver: bridge
+    internal: true
+    # Only api and databases communicate
+
+
+## 11. Network Debugging
+# List networks
+docker network ls
+
+# Inspect network
+docker network inspect my-network
+
+# Check container network settings
+docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' container_name
+
+# Test connectivity
+docker exec container1 ping container2
+docker exec container1 nslookup container2
+
+# View network traffic
+docker run --rm --network container:myapp nicolaka/netshoot
+
+# Packet capture
+docker run --rm --network container:myapp \
+  -v $PWD:/data \
+  nicolaka/netshoot \
+  tcpdump -i eth0 -w /data/capture.pcap
+
+
+## 12. Load Balancing with Docker Networks
+version: '3.9'
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    networks:
+      - frontend
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app
+
+  app:
+    image: myapp
+    networks:
+      - frontend
+      - backend
+    deploy:
+      replicas: 5
+      endpoint_mode: vip  # Virtual IP (load balanced)
+    environment:
+      - DATABASE_URL=postgresql://db:5432/mydb
+
+  db:
+    image: postgres:15
+    networks:
+      - backend
+
+networks:
+  frontend:
+    driver: overlay
+  backend:
+    driver: overlay
+    internal: true
+
+# nginx.conf for load balancing
+upstream backend {
+    server app:8080;
+}
+
+server {
+    listen 80;
+    location / {
+        proxy_pass http://backend;
+    }
+}
+
+
+## 13. Network Aliases and Service Discovery
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    networks:
+      app-network:
+        aliases:
+          - api
+          - api.internal
+          - myapp.local
+
+  worker:
+    image: myapp-worker
+    networks:
+      - app-network
+    environment:
+      # Can use any of the aliases
+      - API_URL=http://api:8080
+      - BACKUP_API_URL=http://myapp.local:8080
+
+networks:
+  app-network:
+    driver: bridge
+
+
+## 14. IPv6 Support
+# Create network with IPv6
+docker network create --ipv6 \
+  --subnet=2001:db8:1::/64 \
+  --gateway=2001:db8:1::1 \
+  my-ipv6-network
+
+# Docker Compose with IPv6
+version: '3.9'
+
+services:
+  app:
+    image: myapp
+    networks:
+      - ipv6-network
+
+networks:
+  ipv6-network:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 2001:db8:1::/64
+          gateway: 2001:db8:1::1

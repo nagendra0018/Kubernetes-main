@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dcn-api
+  namespace: dcn
+  labels:
+    app: dcn-api
+    component: api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: dcn-api
+  template:
+    metadata:
+      labels:
+        app: dcn-api
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: dcn-serviceaccount
+      containers:
+        - name: api
+          image: yourorg/dcn-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dcn-secrets
+                  key: POSTGRES_PASSWORD
+            - name: API_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dcn-secrets
+                  key: API_SECRET_KEY
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1000m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always

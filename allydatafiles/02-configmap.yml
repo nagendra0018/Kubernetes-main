@@ -1,0 +1,56 @@
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: production
+data:
+  # Application settings
+  APP_NAME: "MyApplication"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  DEBUG: "false"
+  PORT: "8080"
+
+  # Database settings
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "myappdb"
+  DB_POOL_SIZE: "20"
+  DB_CONNECTION_TIMEOUT: "30"
+
+  # Redis settings
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # Feature flags
+  FEATURE_ANALYTICS: "true"
+  FEATURE_NOTIFICATIONS: "true"
+  FEATURE_NEW_UI: "false"
+
+  # Application config file
+  application.yaml: |
+    server:
+      port: 8080
+      host: 0.0.0.0
+      timeout: 30
+
+    database:
+      host: postgres-service
+      port: 5432
+      name: myappdb
+      pool:
+        min: 2
+        max: 20
+
+    cache:
+      host: redis-service
+      port: 6379
+      ttl: 3600
+
+    logging:
+      level: info
+      format: json
+      output: stdout

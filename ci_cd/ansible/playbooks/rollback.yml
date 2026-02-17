@@ -1,0 +1,78 @@
+---
+# Ansible Playbook: Rollback Kubernetes Deployment
+# This playbook rolls back the deployment to the previous version
+
+- name: Rollback Kubernetes Deployment
+  hosts: localhost
+  gather_facts: no
+  vars:
+    app_name: cicd-demo
+    namespace: "{{ environment }}"
+    rollback_to_revision: "{{ revision | default('0') }}"
+
+  tasks:
+    - name: Print rollback information
+      debug:
+        msg: "Rolling back {{ app_name }} in {{ environment }} environment"
+
+    - name: Get current deployment status
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ namespace }}"
+        name: "{{ app_name }}"
+      register: current_deployment
+
+    - name: Display current status
+      debug:
+        msg: "Current replicas: {{ current_deployment.resources[0].status.replicas }}, Available: {{ current_deployment.resources[0].status.availableReplicas }}"
+
+    - name: Check deployment history
+      shell: kubectl rollout history deployment/{{ app_name }} -n {{ namespace }}
+      register: deployment_history
+
+    - name: Display deployment history
+      debug:
+        msg: "{{ deployment_history.stdout_lines }}"
+
+    - name: Rollback to previous version
+      shell: |
+        {% if rollback_to_revision != '0' %}
+        kubectl rollout undo deployment/{{ app_name }} -n {{ namespace }} --to-revision={{ rollback_to_revision }}
+        {% else %}
+        kubectl rollout undo deployment/{{ app_name }} -n {{ namespace }}
+        {% endif %}
+      register: rollback_result
+
+    - name: Display rollback result
+      debug:
+        msg: "{{ rollback_result.stdout }}"
+
+    - name: Wait for rollback to complete
+      shell: kubectl rollout status deployment/{{ app_name }} -n {{ namespace }} --timeout=5m
+      register: rollback_status
+
+    - name: Verify rollback
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ namespace }}"
+        name: "{{ app_name }}"
+      register: updated_deployment
+
+    - name: Display rollback status
+      debug:
+        msg: "Rollback successful! Available replicas: {{ updated_deployment.resources[0].status.availableReplicas }}"
+
+    - name: Run health check
+      uri:
+        url: "http://{{ service_endpoint }}/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      until: health_check.status == 200
+      retries: 5
+      delay: 10
+      when: service_endpoint is defined
+
+    - name: Send notification
+      debug:
+        msg: "Rollback completed successfully for {{ app_name }} in {{ environment }}"

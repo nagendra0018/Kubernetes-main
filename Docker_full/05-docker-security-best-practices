@@ -1,0 +1,343 @@
+# Docker Security Best Practices
+
+## 1. Secure Base Images
+FROM alpine:3.19 AS base
+
+# Use specific versions, not 'latest'
+# Scan images regularly with tools like Trivy, Snyk, or Clair
+
+## 2. Non-Root User
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+
+# Install dependencies as root
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY --chown=appuser:appuser . .
+
+# Switch to non-root user
+USER appuser
+
+EXPOSE 8000
+
+CMD ["python", "app.py"]
+
+
+## 3. Minimal Attack Surface
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o app .
+
+# Use distroless or scratch for minimal image
+FROM gcr.io/distroless/static-debian12
+
+COPY --from=builder /app/app /
+
+USER nonroot:nonroot
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app"]
+
+
+## 4. Read-Only Filesystem
+FROM nginx:alpine
+
+# Copy configuration
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY html /usr/share/nginx/html
+
+# Create writable directories
+RUN mkdir -p /var/cache/nginx /var/run/nginx && \
+    chown -R nginx:nginx /var/cache/nginx /var/run/nginx
+
+USER nginx
+
+# Mount as read-only in docker-compose:
+# read_only: true
+# tmpfs:
+#   - /var/cache/nginx
+#   - /var/run/nginx
+
+
+## 5. Security Scanning in Dockerfile
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Stage: Security Scan
+FROM base AS security-scan
+
+COPY . .
+
+# Run security tools
+RUN pip install safety bandit
+RUN safety check --json
+RUN bandit -r . -f json
+
+# Stage: Production
+FROM base AS production
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY --from=security-scan /app .
+
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+CMD ["python", "app.py"]
+
+
+## 6. Secrets Management
+FROM node:18-alpine
+
+WORKDIR /app
+
+# NEVER do this:
+# ENV DATABASE_PASSWORD=mysecretpassword
+# COPY .env .
+
+# Instead, use Docker secrets or environment variables at runtime
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+
+USER node
+
+# Pass secrets at runtime:
+# docker run -e DATABASE_PASSWORD=$DATABASE_PASSWORD myapp
+# or use Docker secrets:
+# docker secret create db_password ./db_password.txt
+
+
+## 7. Multi-Stage Build with Security
+FROM node:18-alpine AS dependencies
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+RUN npm audit --audit-level=high
+
+FROM node:18-alpine AS production
+
+# Install security updates
+RUN apk update && apk upgrade && \
+    apk add --no-cache dumb-init && \
+    rm -rf /var/cache/apk/*
+
+WORKDIR /app
+
+# Copy only necessary files
+COPY --from=dependencies /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY package.json .
+
+# Create non-root user
+RUN addgroup -g 1000 appuser && \
+    adduser -D -u 1000 -G appuser appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+EXPOSE 3000
+
+CMD ["node", "dist/server.js"]
+
+
+## 8. Healthcare Policy Compliant (HIPAA-ready)
+FROM ubuntu:22.04
+
+# Install security updates
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create audit log directory
+RUN mkdir -p /var/log/app
+
+# Copy application
+COPY --chown=1000:1000 . .
+
+# Configure audit logging
+ENV AUDIT_LOG_PATH=/var/log/app/audit.log
+ENV ENCRYPTION_ENABLED=true
+ENV TLS_VERSION=TLSv1.3
+
+# Non-root user
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+EXPOSE 8443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f https://localhost:8443/health || exit 1
+
+CMD ["./app"]
+
+
+## 9. Hardened Python Application
+FROM python:3.11-slim
+
+# Install security patches
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install dependencies with hash verification
+COPY requirements.txt .
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+
+# Copy application
+COPY . .
+
+# Remove build dependencies
+RUN apt-get purge -y build-essential && \
+    apt-get autoremove -y
+
+# Create non-root user with specific UID/GID
+RUN groupadd -r -g 999 appuser && \
+    useradd -r -u 999 -g appuser -d /app -s /sbin/nologin appuser && \
+    chown -R appuser:appuser /app
+
+USER 999:999
+
+# Drop all capabilities
+# In docker-compose:
+# cap_drop:
+#   - ALL
+
+# Set security options
+# security_opt:
+#   - no-new-privileges:true
+
+EXPOSE 8000
+
+# Run with limited resources
+CMD ["gunicorn", \
+     "--bind", "0.0.0.0:8000", \
+     "--workers", "4", \
+     "--timeout", "30", \
+     "--max-requests", "1000", \
+     "--max-requests-jitter", "100", \
+     "app:app"]
+
+
+## 10. Docker Compose Security Configuration
+version: '3.9'
+
+services:
+  app:
+    build: .
+    image: secure-app:latest
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # Drop all capabilities
+    cap_drop:
+      - ALL
+    
+    # Add only required capabilities
+    cap_add:
+      - NET_BIND_SERVICE
+    
+    # Read-only root filesystem
+    read_only: true
+    
+    # Tmpfs for writable directories
+    tmpfs:
+      - /tmp
+      - /var/run
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+          pids: 100
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    
+    # Logging limits
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network isolation
+    networks:
+      - app-network
+    
+    # No host port mapping (use reverse proxy)
+    # expose:
+    #   - 8000
+    
+    # User namespace remapping
+    user: "1000:1000"
+    
+    # Environment variables (use secrets instead)
+    environment:
+      - APP_ENV=production
+    
+    # Secrets (preferred over environment variables)
+    secrets:
+      - db_password
+      - api_key
+
+secrets:
+  db_password:
+    external: true
+  api_key:
+    external: true
+
+networks:
+  app-network:
+    driver: bridge
+    internal: true  # No external access
